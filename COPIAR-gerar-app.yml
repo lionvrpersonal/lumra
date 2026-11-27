@@ -1,0 +1,58 @@
+# Gera o APK (Android) para baixar e publica o site (PC e iPhone pelo navegador).
+# No GitHub: aba Actions > "Gerar app Lumra" > Run workflow.
+name: Gerar app Lumra
+on: workflow_dispatch
+
+env:
+  EXPO_PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+  EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+  EXPO_PUBLIC_COMPANY_NAME: ${{ vars.COMPANY_NAME }}
+  EXPO_PUBLIC_CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
+  EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+  CI: '1'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Conferir configuração
+        run: |
+          test -n "$EXPO_PUBLIC_SUPABASE_URL" -a -n "$EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY" -a -n "$EXPO_PUBLIC_COMPANY_NAME" -a -n "$EXPO_PUBLIC_CONTACT_EMAIL" || { echo "::error::Crie as variáveis SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, COMPANY_NAME e CONTACT_EMAIL"; exit 1; }
+      - name: Arquivo do Firebase (opcional, para notificações)
+        env: { FIREBASE: '${{ secrets.GOOGLE_SERVICES_JSON }}' }
+        run: if [ -n "$FIREBASE" ]; then printf '%s' "$FIREBASE" > google-services.json; fi
+      - run: node instalar.mjs
+      - name: Compilar APK
+        working-directory: lumra-app
+        run: |
+          rm .env
+          npx expo prebuild --platform android
+          cd android && ./gradlew assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../../lumra.apk
+      - name: Publicar para download
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: gh release create "v${{ github.run_number }}" lumra.apk --title "Lumra ${{ github.run_number }}" --notes "Baixe lumra.apk no celular Android e toque para instalar (versão de teste)."
+
+  site:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pages: write, id-token: write }
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Montar o site
+        env: { WEB_BASE_URL: '/${{ github.event.repository.name }}' }
+        run: |
+          node instalar.mjs
+          cd lumra-app && rm .env && npx expo export --platform web
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: lumra-app/dist }
+      - id: deploy
+        uses: actions/deploy-pages@v4
